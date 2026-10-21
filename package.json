@@ -1,0 +1,16 @@
+{
+  "name": "arduino-panel",
+  "version": "1.0.0",
+  "description": "Panel web para leer y modificar variables de Arduino Cloud",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

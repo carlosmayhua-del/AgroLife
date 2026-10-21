@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel Arduino</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #e9eeec;
+    --card: #fafcfb;
+    --ink: #14201e;
+    --muted: #5d6d69;
+    --line: #cfd9d6;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --off: #aab8b4;
+    --err: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1716;
+      --card: #172220;
+      --ink: #e6efec;
+      --muted: #8ea39e;
+      --line: #283835;
+      --accent: #2dd4bf;
+      --accent-ink: #062b27;
+      --off: #3b4d49;
+      --err: #f97066;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 60px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 1.5rem; font-weight: 600; margin: 0; }
+  #estado { font-size: .875rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  #estado i { width: 9px; height: 9px; border-radius: 50%; background: var(--off); display: inline-block; }
+  #estado.ok i { background: var(--accent); }
+  #estado.error { color: var(--err); }
+  #estado.error i { background: var(--err); }
+
+  #lista { display: grid; gap: 10px; }
+  .fila {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .fila .info { min-width: 0; }
+  .fila .nombre { font-weight: 500; overflow-wrap: anywhere; }
+  .fila .meta { font-size: .8125rem; color: var(--muted); }
+  .valor { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .solo-lectura { color: var(--muted); font-size: .75rem; margin-left: 6px; font-weight: 400; }
+
+  /* interruptor */
+  .switch { position: relative; width: 54px; height: 30px; flex: none; }
+  .switch input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+  .switch span { position: absolute; inset: 0; background: var(--off); border-radius: 30px; transition: background .15s; }
+  .switch span::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px;
+    background: #fff; border-radius: 50%; transition: transform .15s;
+  }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(24px); }
+  .switch input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .switch input:disabled { cursor: not-allowed; }
+  .switch input:disabled + span { opacity: .55; }
+
+  /* campos */
+  .editor { display: flex; gap: 8px; }
+  .editor input {
+    width: 130px; padding: 8px 10px; font: inherit; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .editor input:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+  .editor button {
+    padding: 8px 14px; font: inherit; font-weight: 500; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+  }
+  .editor button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .vacio, .fallo { text-align: center; color: var(--muted); padding: 40px 10px; }
+  .fallo { color: var(--err); }
+  @media (max-width: 480px) {
+    .fila { flex-wrap: wrap; }
+    .editor input { width: 100px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Panel Arduino</h1>
+    <div id="estado"><i></i><span>Conectando…</span></div>
+  </header>
+  <div id="lista"><div class="vacio">Cargando variables…</div></div>
+</main>
+
+<script>
+const API = "/api";
+const lista = document.getElementById("lista");
+const estado = document.getElementById("estado");
+const REFRESCO_MS = 3000;
+let editando = false; // evita pisar lo que el usuario esta escribiendo
+
+function setEstado(clase, texto) {
+  estado.className = clase;
+  estado.querySelector("span").textContent = texto;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+function filaHTML(p) {
+  const soloLectura = p.permission === "READ_ONLY";
+  const v = p.last_value;
+  const nombre = esc(p.name || p.variable_name || p.id);
+  const etiquetaLectura = soloLectura ? '<span class="solo-lectura">solo lectura</span>' : "";
+  let control;
+
+  if (typeof v === "boolean") {
+    control = `<label class="switch">
+      <input type="checkbox" data-id="${p.id}" ${v ? "checked" : ""} ${soloLectura ? "disabled" : ""} aria-label="${nombre}">
+      <span></span></label>`;
+  } else if (typeof v === "number" || typeof v === "string") {
+    if (soloLectura) {
+      control = `<div class="valor">${esc(v)}</div>`;
+    } else {
+      const tipo = typeof v === "number" ? "number" : "text";
+      control = `<div class="editor">
+        <input type="${tipo}" step="any" value="${esc(v)}" data-id="${p.id}" data-tipo="${tipo}" aria-label="${nombre}">
+        <button data-guardar="${p.id}">Guardar</button></div>`;
+    }
+  } else {
+    control = `<div class="valor">${v == null ? "—" : esc(JSON.stringify(v))}</div>`;
+  }
+
+  return `<div class="fila" data-fila="${p.id}">
+    <div class="info">
+      <div class="nombre">${nombre}${etiquetaLectura}</div>
+      <div class="meta">${esc(p.type || "")}</div>
+    </div>${control}</div>`;
+}
+
+async function leer() {
+  if (editando) return;
+  try {
+    const res = await fetch(`${API}/properties`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.detail || data.message || "Error " + res.status);
+    if (!Array.isArray(data) || data.length === 0) {
+      lista.innerHTML = '<div class="vacio">Este Thing no tiene variables todavía. Créalas en Arduino Cloud.</div>';
+    } else {
+      lista.innerHTML = data.map(filaHTML).join("");
+    }
+    setEstado("ok", "Actualizado " + new Date().toLocaleTimeString());
+  } catch (e) {
+    setEstado("error", "Sin conexión");
+    lista.innerHTML = `<div class="fallo">No se pudieron leer las variables.<br>${esc(e.message)}<br>Revisa CLIENT_ID, CLIENT_SECRET y THING_ID en el servidor.</div>`;
+  }
+}
+
+async function escribir(id, valor) {
+  setEstado("", "Enviando…");
+  try {
+    const res = await fetch(`${API}/properties/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: valor }),
+    });
+    if (!res.ok) throw new Error("Error " + res.status);
+    setEstado("ok", "Valor enviado");
+  } catch (e) {
+    setEstado("error", "No se pudo enviar el valor");
+  }
+}
+
+// Interruptores: envian al cambiar
+lista.addEventListener("change", e => {
+  const el = e.target;
+  if (el.type === "checkbox" && el.dataset.id) escribir(el.dataset.id, el.checked);
+});
+
+// Campos de numero/texto: envian con el boton Guardar o con Enter
+function guardar(id) {
+  const input = lista.querySelector(`input[data-id="${id}"]`);
+  if (!input) return;
+  const valor = input.dataset.tipo === "number" ? Number(input.value) : input.value;
+  editando = false;
+  escribir(id, valor).then(() => setTimeout(leer, 800));
+}
+lista.addEventListener("click", e => {
+  const id = e.target.dataset.guardar;
+  if (id) guardar(id);
+});
+lista.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.dataset.tipo) guardar(e.target.dataset.id);
+});
+lista.addEventListener("focusin", e => { if (e.target.dataset.tipo) editando = true; });
+lista.addEventListener("focusout", e => { if (e.target.dataset.tipo) editando = false; });
+
+leer();
+setInterval(leer, REFRESCO_MS);
+</script>
+</body>
+</html>
